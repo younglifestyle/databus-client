@@ -166,23 +166,37 @@ func (d *Databus) subproc() {
 		}
 		d.lock.RUnlock()
 
-		// TODO pipeline commit offset
-		for k, v := range commit {
-			if err = c.Do(context.TODO(), "SET", k, v).Err(); err != nil {
-				c.Close()
-				log.Errorf("group(%s) conn.Do(SET,%d,%d) commit error(%v)", d.conf.Group, k, v, err)
-				break
+		if len(commit) != 0 {
+			cmders, err := c.Pipelined(context.TODO(), func(pipeliner redis.Pipeliner) error {
+				for k, v := range commit {
+					pipeliner.Do(context.TODO(), _cmdPub, k, v)
+				}
+				return nil
+			})
+			if err != nil {
+				log.Errorf("group(%s) pipeline(SET) commit error(%v)", d.conf.Group, err)
+				continue
 			}
-			delete(commit, k)
-			commited[k] = v
+
+			for _, cmder := range cmders {
+				delete(commit, cmder.Args()[1].(int32))
+				commited[cmder.Args()[1].(int32)] = cmder.Args()[2].(int64)
+			}
 		}
-		if err != nil {
-			continue
-		}
+		//for k, v := range commit {
+		//	if err = c.Do(context.TODO(), _cmdPub, k, v).Err(); err != nil {
+		//		log.Errorf("group(%s) conn.Do(SET,%d,%d) commit error(%v)", d.conf.Group, k, v, err)
+		//		break
+		//	}
+		//	delete(commit, k)
+		//	commited[k] = v
+		//}
+		//if err != nil {
+		//	continue
+		//}
 
 		// pull messages
 		if res, err = c.Do(context.TODO(), _cmdSub, "").StringSlice(); err != nil {
-			c.Close()
 			log.Errorf("group(%s) conn.Do(MGET) error(%v)", d.conf.Group, err)
 			continue
 		}
@@ -194,6 +208,8 @@ func (d *Databus) subproc() {
 			}
 			d.msgs <- msg
 		}
+		// 数据给出去立马commit，会造成commit还未完成，commit offset处理逻辑就错过了
+		time.Sleep(time.Millisecond * 10)
 	}
 }
 
