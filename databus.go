@@ -12,10 +12,6 @@ import (
 	"time"
 )
 
-const (
-	_appid = "middleware.databus"
-)
-
 type dial func() (redis.Conn, error)
 
 // Config databus config.
